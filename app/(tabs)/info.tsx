@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -62,6 +62,7 @@ const infoStyles = StyleSheet.create({
 export default function InfoScreen() {
   const { extractedInfo, generatedIdentity, refreshCVV, automation, currentProxy } = useApp();
   const { showAlert } = useAlert();
+  const [showSensitive, setShowSensitive] = useState(false);
 
   const noData = !extractedInfo && !generatedIdentity;
 
@@ -138,12 +139,16 @@ export default function InfoScreen() {
                 <View style={styles.sectionHeader}>
                   <MaterialIcons name="person" size={16} color={Colors.accent} />
                   <Text style={[styles.sectionTitle, { color: Colors.accent }]}>Generated Identity</Text>
+                  <Pressable onPress={() => setShowSensitive(value => !value)} style={styles.refreshBtn}>
+                    <MaterialIcons name={showSensitive ? 'visibility-off' : 'visibility'} size={14} color={Colors.accent} />
+                    <Text style={[styles.refreshText, { color: Colors.accent }]}>{showSensitive ? 'Hide' : 'Show'}</Text>
+                  </Pressable>
                 </View>
                 <View style={styles.card}>
                   <InfoRow label="Full Name" value={`${generatedIdentity.firstName} ${generatedIdentity.lastName}`} highlight />
                   <InfoRow label="Email" value={generatedIdentity.email} />
                   <InfoRow label="Username" value={generatedIdentity.username || '—'} mono />
-                  <InfoRow label="Password" value={generatedIdentity.password || '—'} mono />
+                    <InfoRow label="Password" value={showSensitive ? (generatedIdentity.password || '—') : '********'} mono />
                   <InfoRow label="Phone" value={generatedIdentity.phone} />
                   <InfoRow label="Birth Date" value={generatedIdentity.birthDate} />
                   <InfoRow label="Gender" value={generatedIdentity.gender} />
@@ -167,9 +172,9 @@ export default function InfoScreen() {
                 <View style={styles.card}>
                   <InfoRow label="Card Holder" value={generatedIdentity.cardHolder} highlight />
                   <InfoRow label="Card Type" value={generatedIdentity.cardType} />
-                  <InfoRow label="Card Number" value={generatedIdentity.cardNumber} mono />
+                  <InfoRow label="Card Number" value={showSensitive ? generatedIdentity.cardNumber : `**** **** **** ${generatedIdentity.cardNumber.slice(-4)}`} mono />
                   <InfoRow label="Expiry Date" value={generatedIdentity.cardExpiry} mono />
-                  <InfoRow label="CVV" value={generatedIdentity.cardCvv} highlight mono />
+                  <InfoRow label="CVV" value={showSensitive ? generatedIdentity.cardCvv : '***'} highlight mono />
                   <InfoRow label="Bank" value={generatedIdentity.bankName} />
                 </View>
               </View>

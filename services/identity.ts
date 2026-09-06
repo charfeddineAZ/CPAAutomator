@@ -264,7 +264,7 @@ export function generateUTM(url: string): string {
 
 export async function fetchGeoInfo(ip: string): Promise<ExtractedInfo | null> {
   try {
-    const res = await fetch(`https://api.i.pn/json/${ip}`);
+    const res = await fetch(`https://api.i.pn/json/${ip}`, { signal: AbortSignal.timeout(10000) });
     if (!res.ok) throw new Error('API error');
     const data = await res.json();
     return {

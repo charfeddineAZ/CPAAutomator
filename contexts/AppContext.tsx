@@ -37,6 +37,7 @@ interface AppContextType {
   refreshCVV: () => void;
   setExtractedInfo: (info: ExtractedInfo | null) => void;
   setGeneratedIdentity: (identity: GeneratedIdentity | null) => void;
+  notifyTaskComplete: (keyword: string) => void;
   loadProxyList: () => Promise<void>;
   clearStats: () => void;
 }
@@ -74,8 +75,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [generatedIdentity, setGeneratedIdentity] = useState<GeneratedIdentity | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [scripts, setScripts] = useState<Script[]>([
-    { id: '1', name: 'Anti-WebRTC Script', timing: 'before', enabled: true, code: `// Disable WebRTC to prevent IP leaks\ntry { window.RTCPeerConnection = undefined; } catch(e) {}\nconsole.log('[Script] WebRTC disabled');` },
-    { id: '2', name: 'Auto-Fill Helper', timing: 'after', enabled: true, code: `// Helper for form detection\nwindow.__cpa_helper = true;\nconsole.log('[Script] CPA helper injected');` },
+    { id: '1', name: 'Anti-WebRTC Script', timing: 'before', execution: 'sequential', enabled: true, code: `// Disable WebRTC to prevent IP leaks\ntry { window.RTCPeerConnection = undefined; } catch(e) {}\nconsole.log('[Script] WebRTC disabled');` },
+    { id: '2', name: 'Auto-Fill Helper', timing: 'after', execution: 'sequential', enabled: true, code: `// Helper for form detection\nwindow.__cpa_helper = true;\nconsole.log('[Script] CPA helper injected');` },
   ]);
   const [automation, setAutomation] = useState<AutomationState>(defaultAutomation);
   const [currentUrl, setCurrentUrl] = useState('');
@@ -86,6 +87,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentProxy, setCurrentProxy] = useState('');
   const automationRef = useRef(false);
   const proxyIndexRef = useRef(0);
+  const completionRef = useRef({ taskId: '', taskName: '', completed: false });
 
   const addLog = useCallback((level: LogEntry['level'], message: string, taskId?: string, taskName?: string) => {
     const entry: LogEntry = {
@@ -149,7 +151,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [addLog]);
 
   const clearLogs = useCallback(() => setLogs([]), []);
-  const clearStats = useCallback(() => setTaskStats([]), []);
+  const clearStats = useCallback(() => {
+    setTaskStats([]);
+    setLeadHistory([]);
+  }, []);
 
   const addScript = useCallback((script: Omit<Script, 'id'>) => {
     setScripts(prev => [...prev, { ...script, id: `script_${Date.now()}` }]);
@@ -188,7 +193,35 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return proxy;
   }, [proxyList]);
 
-  const runTask = useCallback(async (task: Task, taskIndex: number) => {
+  const waitForAutomation = useCallback(async (duration: number): Promise<boolean> => {
+    const endTime = Date.now() + duration;
+    while (automationRef.current && Date.now() < endTime) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(100, endTime - Date.now())));
+    }
+    return automationRef.current;
+  }, []);
+
+  const waitForTaskCompletion = useCallback(async (taskId: string, timeout: number): Promise<boolean> => {
+    const endTime = Date.now() + timeout;
+    while (
+      automationRef.current &&
+      completionRef.current.taskId === taskId &&
+      !completionRef.current.completed &&
+      Date.now() < endTime
+    ) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return automationRef.current && completionRef.current.taskId === taskId && completionRef.current.completed;
+  }, []);
+
+  const notifyTaskComplete = useCallback((keyword: string) => {
+    if (!automationRef.current || completionRef.current.completed) return;
+    completionRef.current.completed = true;
+    addLog('success', `Smart completion detected: "${keyword}"`, completionRef.current.taskId, completionRef.current.taskName);
+  }, [addLog]);
+
+  const runTask = useCallback(async (task: Task, taskIndex: number, repeatIndex: number) => {
+    completionRef.current = { taskId: task.id, taskName: task.name, completed: false };
     addLog('info', `Starting task: ${task.name}`, task.id, task.name);
     setAutomation(prev => ({
       ...prev, currentTaskIndex: taskIndex, currentTask: task,
@@ -197,7 +230,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     updateTask(task.id, { status: 'running' });
 
     // Step 1: Proxy setup
-    await new Promise(r => setTimeout(r, 400));
+    if (!(await waitForAutomation(400))) return false;
     let usedProxy = '';
     if (settings.proxy.type !== 'none') {
       if (settings.proxy.rotation && proxyList.length > 0) {
@@ -213,8 +246,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAutomation(prev => ({ ...prev, phaseDetail: 'Fetching geo-information...' }));
 
     // Step 2: Geo info
-    await new Promise(r => setTimeout(r, 300));
+    if (!(await waitForAutomation(300))) return false;
     const geoInfo = await fetchGeoInfo('196.187.152.216');
+    if (!automationRef.current) return false;
     if (geoInfo) {
       setExtractedInfo(geoInfo);
       addLog('success', `Geo: ${geoInfo.city}, ${geoInfo.country} | IP: ${geoInfo.ip}`, task.id, task.name);
@@ -229,7 +263,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setAutomation(prev => ({ ...prev, phaseDetail: 'Generating identity...' }));
 
     // Step 3: Identity
-    await new Promise(r => setTimeout(r, 300));
+    if (!(await waitForAutomation(300))) return false;
     const emailToUse = emailPool.length > 0
       ? emailPool[0]
       : `user${Date.now()}@gmail.com`;
@@ -242,46 +276,63 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     addLog('success', `Identity: ${identity.firstName} ${identity.lastName} | ${identity.email}`, task.id, task.name);
-    addLog('info', `Card: ${identity.cardType} ****${identity.cardNumber.slice(-4)} | CVV: ${identity.cardCvv}`, task.id, task.name);
+    addLog('info', `Card generated: ${identity.cardType} ****${identity.cardNumber.slice(-4)}`, task.id, task.name);
 
     setAutomation(prev => ({ ...prev, phaseDetail: 'Patching browser timezone & language...' }));
-    await new Promise(r => setTimeout(r, 300));
+    if (!(await waitForAutomation(300))) return false;
     addLog('info', `Browser patched: TZ=${geoInfo?.timezone || 'UTC'}, Lang=${geoInfo?.language || 'en-US'}`, task.id, task.name);
     addLog('info', 'WebRTC disabled | Anti-detection active | Canvas spoofed', task.id, task.name);
 
     // Step 4: Open browser
-    await new Promise(r => setTimeout(r, 400));
+    if (!(await waitForAutomation(400))) return false;
     setAutomation(prev => ({ ...prev, phase: 'browser', phaseDetail: `Loading: ${task.url}` }));
     setCurrentUrl(task.url);
     addLog('success', `Browser opened: ${task.url}`, task.id, task.name);
 
-    // Step 5: Execute task (simulate timing based on mode)
-    await new Promise(r => setTimeout(r, 800));
-    setAutomation(prev => ({ ...prev, phase: 'executing', phaseDetail: 'Analyzing page...' }));
-    addLog('info', 'Page analyzed | Detecting forms...', task.id, task.name);
+    // Step 5: Execute according to the selected mode.
+    const sessionRepeats = task.mode === 'mode2'
+      ? Math.max(1, task.mode2Config?.taskRepeatCount || 1)
+      : 1;
+    const modeDuration = task.mode === 'mode1'
+      ? Math.max(1, task.mode1Config?.browserDuration || 60) * 1000
+      : task.mode === 'mode2'
+        ? Math.max(1, task.mode2Config?.taskDuration || 60) * 1000
+        : 60000;
 
-    await new Promise(r => setTimeout(r, 600));
-    setAutomation(prev => ({ ...prev, phaseDetail: 'Filling forms intelligently...' }));
-    addLog('info', `Auto-filling: ${identity.firstName} ${identity.lastName} | ${identity.email}`, task.id, task.name);
+    completionRef.current.completed = false;
+    for (let sessionRepeat = 0; sessionRepeat < sessionRepeats; sessionRepeat++) {
+      if (!(await waitForAutomation(800))) return false;
+      setAutomation(prev => ({
+        ...prev,
+        phase: 'executing',
+        phaseDetail: sessionRepeats > 1 ? `Executing session ${sessionRepeat + 1}/${sessionRepeats}...` : 'Analyzing page...',
+      }));
+      addLog('info', 'Page analyzed | Detecting forms...', task.id, task.name);
 
-    await new Promise(r => setTimeout(r, 800));
-    setAutomation(prev => ({ ...prev, phaseDetail: 'Simulating human interaction...' }));
-    addLog('info', 'Human behavior: mouse movements + random delays + scrolling', task.id, task.name);
+      if (!(await waitForAutomation(600))) return false;
+      setAutomation(prev => ({ ...prev, phaseDetail: 'Filling forms intelligently...' }));
+      addLog('info', `Auto-filling: ${identity.firstName} ${identity.lastName} | ${identity.email}`, task.id, task.name);
 
-    // Task mode timing
-    const modeDuration =
-      task.mode === 'mode1' ? (task.mode1Config?.browserDuration || 60) * 1000 :
-      task.mode === 'mode2' ? (task.mode2Config?.taskDuration || 60) * 1000 :
-      15000; // mode3 uses smart detection
+      if (!(await waitForAutomation(800))) return false;
+      setAutomation(prev => ({ ...prev, phaseDetail: 'Simulating human interaction...' }));
+      addLog('info', 'Human behavior: mouse movements + random delays + scrolling', task.id, task.name);
 
-    const waitTime = Math.min(modeDuration, 3000); // cap at 3s in simulation
-    await new Promise(r => setTimeout(r, waitTime));
+      if (task.mode === 'mode3') {
+        setAutomation(prev => ({ ...prev, phaseDetail: 'Waiting for smart completion...' }));
+        const completed = await waitForTaskCompletion(task.id, modeDuration);
+        if (!completed) {
+          addLog('warning', 'Completion keyword was not detected before timeout', task.id, task.name);
+        }
+      } else if (!(await waitForAutomation(modeDuration))) {
+        return false;
+      }
+    }
 
     // Step 6: Lead check
     setAutomation(prev => ({ ...prev, phase: 'checking', phaseDetail: 'Checking lead via CPA Grip...' }));
     addLog('info', `Lead check for IP: ${geoInfo?.ip || 'unknown'} (direct connection)`, task.id, task.name);
 
-    await new Promise(r => setTimeout(r, 800));
+    if (!(await waitForAutomation(800))) return false;
 
     let isLead = false;
     if (settings.cpaGripUserId && settings.cpaGripKey && geoInfo?.ip) {
@@ -319,16 +370,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Finalize
-    await new Promise(r => setTimeout(r, 300));
-    updateTask(task.id, { status: 'completed', completedRuns: (task.completedRuns || 0) + 1 });
+    if (!(await waitForAutomation(300))) return false;
+    updateTask(task.id, { status: 'completed', completedRuns: (task.completedRuns || 0) + repeatIndex + 1 });
     addLog('success', `Task completed: ${task.name}`, task.id, task.name);
-  }, [emailPool, settings, proxyList, addLog, updateTask, getNextProxy, updateTaskStats]);
+    return true;
+  }, [emailPool, settings, proxyList, addLog, updateTask, getNextProxy, updateTaskStats, waitForAutomation, waitForTaskCompletion]);
 
   const startAutomation = useCallback(async () => {
+    if (automationRef.current) return;
     const enabledTasks = tasks.filter(t => t.enabled);
     if (enabledTasks.length === 0) { addLog('warning', 'No enabled tasks to run'); return; }
     automationRef.current = true;
-    setAutomation({ ...defaultAutomation, isRunning: true, phase: 'preparing', phaseDetail: 'Starting automation...' });
+    setAutomation({
+      ...defaultAutomation,
+      isRunning: true,
+      phase: 'preparing',
+      phaseDetail: 'Starting automation...',
+      startTime: new Date(),
+    });
     addLog('success', `=== Automation STARTED | ${enabledTasks.length} tasks ===`);
 
     // Load proxy list if rotation enabled
@@ -342,24 +401,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     for (let i = 0; i < enabledTasks.length; i++) {
       if (!automationRef.current) break;
       const task = enabledTasks[i];
-      try {
-        await runTask(task, i);
-      } catch (err) {
-        addLog('error', `Task error: ${task.name} - ${String(err)}`, task.id, task.name);
-        updateTask(task.id, { status: 'error' });
-        updateTaskStats(task.id, task.name, 'error');
+      const configuredRepeats = task.mode === 'mode1'
+        ? task.mode1Config?.repeatCount
+        : task.mode === 'mode2'
+          ? task.mode2Config?.operationRepeatCount
+          : task.mode3Config?.operationRepeatCount;
+      const repeatCount = task.repeatCount === 0
+        ? Number.MAX_SAFE_INTEGER
+        : Math.max(1, configuredRepeats || task.repeatCount || 1);
+
+      for (let repeat = 0; repeat < repeatCount && automationRef.current; repeat++) {
+        try {
+          const completed = await runTask(task, i, repeat);
+          if (!completed) break;
+        } catch (err) {
+          addLog('error', `Task error: ${task.name} - ${String(err)}`, task.id, task.name);
+          updateTask(task.id, { status: 'error' });
+          updateTaskStats(task.id, task.name, 'error');
+          break;
+        }
       }
       if (i < enabledTasks.length - 1 && automationRef.current) {
         const wait = (settings.waitBetweenTasks || 5) * 1000;
         addLog('info', `Waiting ${settings.waitBetweenTasks}s before next task...`);
-        await new Promise(r => setTimeout(r, wait));
+        await waitForAutomation(wait);
       }
     }
 
+    if (!automationRef.current) return;
     setAutomation(prev => ({ ...prev, isRunning: false, phase: 'completed', phaseDetail: 'All tasks completed' }));
     automationRef.current = false;
     addLog('success', '=== All tasks COMPLETED ===');
-  }, [tasks, settings, addLog, runTask, updateTask, updateTaskStats, loadProxyList]);
+  }, [tasks, settings, addLog, runTask, updateTask, updateTaskStats, loadProxyList, waitForAutomation]);
 
   const stopAutomation = useCallback(() => {
     automationRef.current = false;
@@ -375,7 +448,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       addTask, updateTask, deleteTask, reorderTasks, updateSettings, addLog, clearLogs,
       addScript, updateScript, deleteScript,
       startAutomation, stopAutomation, setCurrentUrl, setEmailPool, refreshCVV,
-      setExtractedInfo, setGeneratedIdentity, loadProxyList, clearStats,
+      setExtractedInfo, setGeneratedIdentity, notifyTaskComplete, loadProxyList, clearStats,
     }}>
       {children}
     </AppContext.Provider>

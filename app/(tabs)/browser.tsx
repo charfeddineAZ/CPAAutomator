@@ -14,7 +14,7 @@ import {
 } from '../../services/automation';
 
 export default function BrowserScreen() {
-  const { automation, currentUrl, setCurrentUrl, scripts, extractedInfo, generatedIdentity, addLog } = useApp();
+  const { automation, currentUrl, setCurrentUrl, scripts, extractedInfo, generatedIdentity, addLog, notifyTaskComplete } = useApp();
   const [inputUrl, setInputUrl] = useState(currentUrl || 'https://www.google.com');
   const [loadedUrl, setLoadedUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -28,12 +28,21 @@ export default function BrowserScreen() {
   const timezone = extractedInfo?.timezone || 'America/New_York';
   const language = extractedInfo?.language || 'en-US';
 
+  const composeScripts = (scriptList: typeof scripts) => {
+    const sequential = scriptList.filter(script => (script.execution || 'sequential') === 'sequential');
+    const parallel = scriptList.filter(script => script.execution === 'parallel');
+    const run = (script: typeof scripts[number]) => `(async function(){\ntry {\n${script.code}\n} catch (error) { console.warn('[CPA] Script failed:', ${JSON.stringify(script.name)}, error); }\n})()`;
+    const sequentialCode = sequential.map(script => `await ${run(script)};`).join('\n');
+    const parallelCode = parallel.length > 0 ? `await Promise.all([${parallel.map(script => run(script)).join(',')}]);` : '';
+    return `(async function(){\n${sequentialCode}\n${parallelCode}\n})();\ntrue;`;
+  };
+
   // Build before scripts
   const beforeScripts = [
     buildAntiDetectionScript(automation.currentTask?.userAgent || '', timezone, language),
     buildTimezoneScript(timezone, language),
-    ...scripts.filter(s => s.enabled && s.timing === 'before').map(s => s.code),
-  ].join('\n');
+  ];
+  const beforeUserScripts = scripts.filter(s => s.enabled && s.timing === 'before');
 
   // Build after scripts
   const afterIdentityScript = generatedIdentity ? buildSmartFormFillScript({
@@ -59,8 +68,10 @@ export default function BrowserScreen() {
     buildHumanBehaviorScript(),
     afterIdentityScript,
     completionScript,
-    ...scripts.filter(s => s.enabled && s.timing === 'after').map(s => s.code),
-  ].join('\n');
+  ];
+  const afterUserScripts = scripts.filter(s => s.enabled && s.timing === 'after');
+  const beforeScriptCode = `${beforeScripts.join('\n')}\n${composeScripts(beforeUserScripts)}`;
+  const afterScriptCode = `${afterScripts.join('\n')}\n${composeScripts(afterUserScripts)}`;
 
   const navigate = () => {
     let url = inputUrl.trim();
@@ -73,11 +84,12 @@ export default function BrowserScreen() {
     try {
       const data = JSON.parse(event.nativeEvent.data);
       if (data.type === 'TASK_COMPLETE') {
-        addLog('success', `Smart completion detected! Keyword: "${data.keyword}" | URL: ${data.url}`,
+        notifyTaskComplete(data.keyword || 'completion keyword');
+        addLog('info', `Completion page: ${data.url || 'current page'}`,
           automation.currentTask?.id, automation.currentTask?.name);
       }
     } catch { /* ignore non-JSON messages */ }
-  }, [automation.currentTask, addLog]);
+  }, [automation.currentTask, addLog, notifyTaskComplete]);
 
   if (isIdle) {
     return (
@@ -182,8 +194,8 @@ export default function BrowserScreen() {
           ref={webviewRef}
           source={{ uri: displayUrl }}
           style={styles.webview}
-          injectedJavaScript={afterScripts || 'true;'}
-          injectedJavaScriptBeforeContentLoaded={beforeScripts || 'true;'}
+          injectedJavaScript={afterScriptCode || 'true;'}
+          injectedJavaScriptBeforeContentLoaded={beforeScriptCode || 'true;'}
           onLoadStart={() => setLoading(true)}
           onLoadEnd={() => setLoading(false)}
           onNavigationStateChange={(state) => {

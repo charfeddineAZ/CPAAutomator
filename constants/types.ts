@@ -120,6 +120,7 @@ export interface Script {
   name: string;
   code: string;
   timing: 'before' | 'after';
+  execution?: 'parallel' | 'sequential';
   enabled: boolean;
 }
 

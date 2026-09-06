@@ -16,9 +16,11 @@ export default function EmailPoolScreen() {
   const [bulkText, setBulkText] = useState('');
   const [singleEmail, setSingleEmail] = useState('');
 
+  const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
   const addSingle = () => {
     const email = singleEmail.trim().toLowerCase();
-    if (!email.includes('@')) {
+    if (!isValidEmail(email)) {
       showAlert('Invalid', 'Enter a valid email address');
       return;
     }
@@ -35,8 +37,8 @@ export default function EmailPoolScreen() {
     const lines = bulkText
       .split('\n')
       .map(l => l.trim().toLowerCase())
-      .filter(l => l.includes('@') && l.includes('.'));
-    const unique = lines.filter(e => !emailPool.includes(e));
+      .filter(isValidEmail);
+    const unique = [...new Set(lines)].filter(e => !emailPool.includes(e));
     if (unique.length === 0) {
       showAlert('No new emails', 'All emails are already in the pool or invalid');
       return;

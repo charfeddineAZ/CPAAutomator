@@ -226,6 +226,7 @@ export function buildCompletionDetectorScript(keywords: string[]): string {
   return `
 (function() {
   var keywords = ${kwList};
+  var completionReported = false;
   
   function checkCompletion() {
     var bodyText = document.body.innerText.toLowerCase();
@@ -234,7 +235,8 @@ export function buildCompletionDetectorScript(keywords: string[]): string {
       return bodyText.includes(kw) || title.includes(kw);
     });
     
-    if (found) {
+    if (found && !completionReported) {
+      completionReported = true;
       window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({
         type: 'TASK_COMPLETE',
         keyword: keywords.find(kw => bodyText.includes(kw) || title.includes(kw)),

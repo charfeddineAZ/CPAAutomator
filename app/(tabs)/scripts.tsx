@@ -11,9 +11,9 @@ import { Script } from '../../constants/types';
 import { useAlert } from '@/template';
 
 const DEFAULT_SCRIPTS = [
-  { name: 'Disable WebRTC', timing: 'before' as const, code: `// Prevent WebRTC IP leak\ntry {\n  const OrigRTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection;\n  window.RTCPeerConnection = undefined;\n  window.webkitRTCPeerConnection = undefined;\n} catch(e) {}\nconsole.log('[CPA] WebRTC disabled');` },
-  { name: 'Auto Fill Forms', timing: 'after' as const, code: `// Smart form detection & fill\nwindow.__cpaAutoFill = function(identity) {\n  const inputs = document.querySelectorAll('input');\n  inputs.forEach(inp => {\n    const name = (inp.name || inp.id || inp.placeholder || '').toLowerCase();\n    if (name.includes('email')) inp.value = identity.email;\n    if (name.includes('first') || name === 'fname') inp.value = identity.firstName;\n    if (name.includes('last') || name === 'lname') inp.value = identity.lastName;\n    if (name.includes('phone') || name.includes('tel')) inp.value = identity.phone;\n    if (name.includes('zip') || name.includes('postal')) inp.value = identity.postalCode;\n  });\n};\nconsole.log('[CPA] Auto-fill helper loaded');` },
-  { name: 'Human Behavior Simulator', timing: 'after' as const, code: `// Simulate human mouse movement\n(function(){\n  let x = 100, y = 100;\n  const move = () => {\n    x += (Math.random() - 0.5) * 20;\n    y += (Math.random() - 0.5) * 20;\n    const evt = new MouseEvent('mousemove', {clientX: x, clientY: y, bubbles: true});\n    document.dispatchEvent(evt);\n    setTimeout(move, 200 + Math.random() * 300);\n  };\n  move();\n  console.log('[CPA] Human behavior active');\n})();` },
+  { name: 'Disable WebRTC', timing: 'before' as const, execution: 'sequential' as const, code: `// Prevent WebRTC IP leak\ntry {\n  const OrigRTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection;\n  window.RTCPeerConnection = undefined;\n  window.webkitRTCPeerConnection = undefined;\n} catch(e) {}\nconsole.log('[CPA] WebRTC disabled');` },
+  { name: 'Auto Fill Forms', timing: 'after' as const, execution: 'sequential' as const, code: `// Smart form detection & fill\nwindow.__cpaAutoFill = function(identity) {\n  const inputs = document.querySelectorAll('input');\n  inputs.forEach(inp => {\n    const name = (inp.name || inp.id || inp.placeholder || '').toLowerCase();\n    if (name.includes('email')) inp.value = identity.email;\n    if (name.includes('first') || name === 'fname') inp.value = identity.firstName;\n    if (name.includes('last') || name === 'lname') inp.value = identity.lastName;\n    if (name.includes('phone') || name.includes('tel')) inp.value = identity.phone;\n    if (name.includes('zip') || name.includes('postal')) inp.value = identity.postalCode;\n  });\n};\nconsole.log('[CPA] Auto-fill helper loaded');` },
+  { name: 'Human Behavior Simulator', timing: 'after' as const, execution: 'parallel' as const, code: `// Simulate human mouse movement\n(function(){\n  let x = 100, y = 100;\n  const move = () => {\n    x += (Math.random() - 0.5) * 20;\n    y += (Math.random() - 0.5) * 20;\n    const evt = new MouseEvent('mousemove', {clientX: x, clientY: y, bubbles: true});\n    document.dispatchEvent(evt);\n    setTimeout(move, 200 + Math.random() * 300);\n  };\n  move();\n  console.log('[CPA] Human behavior active');\n})();` },
 ];
 
 export default function ScriptsScreen() {
@@ -21,17 +21,17 @@ export default function ScriptsScreen() {
   const { showAlert } = useAlert();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Script | null>(null);
-  const [form, setForm] = useState({ name: '', code: '', timing: 'before' as 'before' | 'after' });
+  const [form, setForm] = useState({ name: '', code: '', timing: 'before' as 'before' | 'after', execution: 'sequential' as 'parallel' | 'sequential' });
 
   const openAdd = (preset?: typeof DEFAULT_SCRIPTS[0]) => {
     setEditing(null);
-    setForm(preset ? { name: preset.name, code: preset.code, timing: preset.timing } : { name: '', code: '', timing: 'before' });
+    setForm(preset ? { name: preset.name, code: preset.code, timing: preset.timing, execution: preset.execution } : { name: '', code: '', timing: 'before', execution: 'sequential' });
     setShowModal(true);
   };
 
   const openEdit = (s: Script) => {
     setEditing(s);
-    setForm({ name: s.name, code: s.code, timing: s.timing });
+    setForm({ name: s.name, code: s.code, timing: s.timing, execution: s.execution || 'sequential' });
     setShowModal(true);
   };
 
@@ -83,7 +83,7 @@ export default function ScriptsScreen() {
             <View key={s.id} style={styles.scriptCard}>
               <View style={styles.scriptHeader}>
                 <View style={[styles.timingBadge, { backgroundColor: timingColor(s.timing) + '20', borderColor: timingColor(s.timing) + '40' }]}>
-                  <Text style={[styles.timingText, { color: timingColor(s.timing) }]}>{s.timing.toUpperCase()}</Text>
+                  <Text style={[styles.timingText, { color: timingColor(s.timing) }]}>{`${s.timing.toUpperCase()} / ${(s.execution || 'sequential').toUpperCase()}`}</Text>
                 </View>
                 <Text style={styles.scriptName} numberOfLines={1}>{s.name}</Text>
                 <Switch
@@ -146,6 +146,21 @@ export default function ScriptsScreen() {
                 >
                   <Text style={[styles.chipText, form.timing === t && { color: Colors.primary }]}>
                     {t === 'before' ? 'Before Page Load' : 'After Page Load'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={[styles.label, { marginTop: Spacing.sm }]}>Execution</Text>
+            <View style={styles.optionRow}>
+              {(['sequential', 'parallel'] as const).map(mode => (
+                <Pressable
+                  key={mode}
+                  style={[styles.chip, form.execution === mode && styles.chipActive]}
+                  onPress={() => setForm(p => ({ ...p, execution: mode }))}
+                >
+                  <Text style={[styles.chipText, form.execution === mode && { color: Colors.primary }]}>
+                    {mode === 'sequential' ? 'Sequential' : 'Parallel'}
                   </Text>
                 </Pressable>
               ))}
